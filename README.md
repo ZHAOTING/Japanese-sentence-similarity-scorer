@@ -42,3 +42,4 @@ You are able to segment the sentences and calculate several similarty scores bet
 * sklearn
 * nltk
 * mecab (for word segmentation)
+* pre-trained Japanese word-embedding file (gensim txt file or with whitespace-sperated lines "[word] [val1] [val2] [val3] ...")
