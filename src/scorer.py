@@ -36,6 +36,8 @@ class EmbeddingBasedScorer():
         with open(path) as f:
             for line in f.readlines():
                 items = line.strip().split(" ")
+                if len(items) == 2: # skip gensim w2v head
+                    continue
                 word = items[0]
                 vec = items[1:]
                 if vocab is None:
@@ -49,7 +51,7 @@ class EmbeddingBasedScorer():
         res1 = oneside_greedy_matching_score(refs, hyps, w2v)
         res2 = oneside_greedy_matching_score(hyps, refs, w2v)
         res_sum = (res1 + res2)/2.0
-        return np.mean(res_sum)
+        return res_sum
 
     def oneside_greedy_matching_score(self, refs, hyps, w2v):
         dim = list(w2v.values())[0].shape[0] # embedding dimensions
@@ -130,7 +132,7 @@ class EmbeddingBasedScorer():
             scores.append(o)
 
         scores = np.asarray(scores)
-        return np.mean(scores)
+        return scores
 
     def embedding_average_score(self, refs, hyps, w2v):
         dim = list(w2v.values())[0].shape[0] # embedding dimensions
@@ -164,7 +166,7 @@ class EmbeddingBasedScorer():
             scores.append(o)
 
         scores = np.asarray(scores)
-        return np.mean(scores)
+        return scores
 
     def score(self, refs, hyps):
         greedy_score = greedy_matching_score(refs, hyps, self.w2v)
