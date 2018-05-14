@@ -1,17 +1,19 @@
 import MeCab
 
 class MecabSegmentor():
-    def __init__():
-        tagger = MeCab.Tagger('-d /usr/lib/mecab/dic/mecab-ipadic-neologd')
+    def __init__(self):
+        self.tagger = MeCab.Tagger("-Ochasen")
 
-    def get_tokens(text):
-        tagger.parse('')
+    def get_tokens(self, text):
+        self.tagger.parse('')
 
-        parsed = tagger.parseToNode(text)
+        parsed = self.tagger.parseToNode(text)
         tokens = []
 
         while parsed:
             tokens.append(parsed.surface)
             parsed = parsed.next
+
+        tokens = list(filter(lambda w:w != "", tokens))
 
         return tokens

@@ -6,14 +6,14 @@ import sklearn.metrics
 from nltk.translate.bleu_score import sentence_bleu
 from nltk.translate.bleu_score import SmoothingFunction
 
-import skipthoughts
+# import skipthoughts
 
 class WordOverlappingScorer():
     def __init__(self):
         pass
 
     def score(self, refs, hyps, n=2):
-        return bleu_n_score(refs, hyps, n)
+        return self.bleu_n_score(refs, hyps, n)
 
     def bleu_n_score(self, refs, hyps, n=2):
         assert n in [1, 2, 3, 4]
@@ -23,12 +23,12 @@ class WordOverlappingScorer():
                 scores.append(sentence_bleu(ref, hyp, smoothing_function=SmoothingFunction().method7, weights=[1.0/n]*n))
             except:
                 scores.append(0.0)
-        return np.mean(scores)
+        return scores
 
 class EmbeddingBasedScorer():
     def __init__(self, w2v_path, vocab=None):
         print("> loading word2vec...")
-        self.w2v = get_w2v(w2v_path, vocab)
+        self.w2v = self.get_w2v(w2v_path, vocab)
         print("> word2vec loaded.")
 
     def get_w2v(self, path, vocab=None):
@@ -48,8 +48,8 @@ class EmbeddingBasedScorer():
         return w2v
 
     def greedy_matching_score(self, refs, hyps, w2v):
-        res1 = oneside_greedy_matching_score(refs, hyps, w2v)
-        res2 = oneside_greedy_matching_score(hyps, refs, w2v)
+        res1 = self.oneside_greedy_matching_score(refs, hyps, w2v)
+        res2 = self.oneside_greedy_matching_score(hyps, refs, w2v)
         res_sum = (res1 + res2)/2.0
         return res_sum
 
@@ -169,9 +169,9 @@ class EmbeddingBasedScorer():
         return scores
 
     def score(self, refs, hyps):
-        greedy_score = greedy_matching_score(refs, hyps, self.w2v)
-        extrema_score = vector_extrema_score(refs, hyps, self.w2v)
-        average_score = embedding_average_score(refs, hyps, self.w2v)
+        greedy_score = self.greedy_matching_score(refs, hyps, self.w2v)
+        extrema_score = self.vector_extrema_score(refs, hyps, self.w2v)
+        average_score = self.embedding_average_score(refs, hyps, self.w2v)
         return greedy_score, extrema_score, average_score
 
 class SkipThoughtsScorer():
@@ -193,4 +193,4 @@ class SkipThoughtsScorer():
             scores.append(o)
 
         scores = np.asarray(scores)
-        return np.mean(scores)
+        return scores
