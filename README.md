@@ -19,6 +19,7 @@ Japanese word embeddings are from [Fasttext](https://fasttext.cc/docs/en/crawl-v
 * Get python 3
 * Run `pip install -r ./requirements.txt` to obtain required packages.
 * Run `python -m unidic download` to obtain Japanese dictionary for Fugashi tokenizer.
+* Run `cd src; python download_embeddings.py` to obtain Japanese word embeddings.
 
 ## Example
 
