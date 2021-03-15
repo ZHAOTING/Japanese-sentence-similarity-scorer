@@ -1,0 +1,5 @@
+fugashi
+unidic
+numpy
+sklearn
+nltk
