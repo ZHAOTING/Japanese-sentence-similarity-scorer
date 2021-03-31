@@ -14,37 +14,87 @@ class WordOverlappingScorer():
         pass
 
     def score(self, refs, hyps, n=2):
-        return self.bleu_n_score(refs, hyps, n)
+        return self.batch_bleu(hyps, refs, n)
 
-    def bleu_n_score(self, refs, hyps, n=2):
-        assert n in [1, 2, 3, 4]
+    def multi_ref_score(self, mrefs, hyps, n=2):
+        return self.batch_multi_ref_bleu(hyps, mrefs, n)
+
+    def batch_bleu(self, hyps, refs, n=2):
+        """Calculate BLEU-n scores in a batch
+
+        Arguments:
+            hyps {list of list} -- hypotheses, each hypothesis is a list of tokens
+            refs {list of list} -- references, each reference is a list of tokens
+            n {int} -- n for BLEU-n (default: 2)
+
+        Returns:
+            {list of float} list of BLEU scores
+        """
+        assert len(hyps) == len(refs)
+        
+        weights = [1./n]*n
         scores = []
-        for ref, hyp in zip(refs, hyps):
-            try:
-                score = sentence_bleu(
-                    ref, 
-                    hyp, 
-                    smoothing_function=SmoothingFunction().method7, 
-                    weights=[1.0/n]*n
-                )
-            except Exception as e:
-                print(e)
+        for hyp_tokens, ref_tokens in zip(hyps, refs):
+            if len(hyp_tokens) == 0:
                 score = 0.0
+            else:
+                try:
+                    score = sentence_bleu(
+                        ref_tokens,
+                        hyp_tokens,
+                        weights=weights,
+                        smoothing_function=SmoothingFunction().method7
+                    )
+                except e:
+                    raise Exception(f"BLEU score error: {e}")
+            scores.append(score)
+        return scores
+
+    def batch_multi_ref_bleu(self, hyps, mrefs, n=2):
+        """Calculate multiple-referenced BLEU-n scores in a batch
+
+        Arguments:
+            hyps {list of str} -- hypotheses, each hypothesis is a list of tokens
+            mrefs {list of list of list} -- multi-references, each multi-reference is a list 
+                                            of references, each reference is a list of tokens
+            n {int} -- n for BLEU-n (default: 2)
+
+        Returns:
+            {list of float} list of BLEU scores
+        """
+        assert len(hyps) == len(mrefs)
+
+        weights = [1./n]*n
+        scores = []
+        for hyp_tokens, mref_tokens in zip(hyps, mrefs):
+            if len(hyp_tokens) == 0:
+                score = 0.0
+            else:
+                try:
+                    score = sentence_bleu(
+                        mref_tokens,
+                        hyp_tokens,
+                        weights=weights,
+                        smoothing_function=SmoothingFunction().method1
+                    )
+                except e:
+                    raise Exception(f"BLEU score error: {e}")
             scores.append(score)
         return scores
 
 
 class EmbeddingBasedScorer():
     def __init__(self, embedding_path=Config.embedding_filepath, vocab=None):
-        self.w2v = self.get_w2v(embedding_path, vocab)
+        self.w2v = self._get_w2v(embedding_path, vocab)
         self.vocab_size = len(self.w2v)
         self.emb_dim = next(iter(self.w2v.values())).shape[0]
         print(f"Embedding-based scorer loaded {len(self.w2v)} embeddings from {embedding_path}")
 
-    def get_w2v(self, path, vocab=None):
+    def _get_w2v(self, path, vocab=None):
         fin = io.open(path, 'r', encoding='utf-8', newline='\n', errors='ignore')
         n, d = map(int, fin.readline().split())
         w2v = {}
+
         n_covered_vocab = 0
         for line in fin:
             tokens = line.rstrip().split(' ')
@@ -56,127 +106,143 @@ class EmbeddingBasedScorer():
                     n_covered_vocab += 1
                 if n_covered_vocab >= len(vocab):
                     break
+
+        missing_words = vocab.difference(set(w2v.keys()))
+        print(f"Words not found in pretrained embeddings: {list(missing_words)}")
+        
         return w2v
 
-    def greedy_matching_score(self, refs, hyps):
-        res1 = self.oneside_greedy_matching_score(refs, hyps)
-        res2 = self.oneside_greedy_matching_score(hyps, refs)
-        res_sum = (res1 + res2)/2.0
-        return res_sum
+    def _tokens2emb(self, tokens):
+        embs = [self.w2v[token] for token in tokens if token in self.w2v]
+        if len(embs) == 0:
+            embs = [[0.]*self.emb_mat.shape[1]]
+        return embs
 
-    def oneside_greedy_matching_score(self, refs, hyps):
-        scores = []
-        for ref, hyp in zip(refs, hyps):
-            y_count = 0
-            x_count = 0
-            o = 0.0
-            Y = np.zeros((self.emb_dim, 1))
-            for tok in hyp:
-                if tok in self.w2v:
-                    Y = np.hstack((Y, (self.w2v[tok].reshape((self.emb_dim, 1)))))
-                    y_count += 1
+    def _cosine_similarity(self, hyps, refs):
+        sims = np.sum(hyps * refs, axis=1) / (np.sqrt((np.sum(hyps * hyps, axis=1) * np.sum(refs * refs, axis=1))) + 1e-10)
+        return sims
 
-            for tok in ref:
-                if tok in self.w2v:
-                    x = self.w2v[tok]
-                    tmp = sklearn.metrics.pairwise.cosine_similarity(Y.T, x.reshape(1, -1))
-                    o += np.max(tmp)
-                    x_count += 1
+    def _embedding_metric(self, hyps_emb, refs_emb, method='average'):
+        if method == 'average':
+            hyps_avg_emb = [np.mean(hyp, axis=0) for hyp in hyps_emb]
+            refs_avg_emb = [np.mean(ref, axis=0) for ref in refs_emb]
+            sims = self._cosine_similarity(np.array(hyps_avg_emb), np.array(refs_avg_emb))
+            return sims.tolist()
+        elif method == "multi_ref_average":
+            hyps_avg_emb = [np.mean(hyp, axis=0) for hyp in hyps_emb]
+            mrefs_avg_emb = [[np.mean(ref, axis=0) for ref in refs] for refs in refs_emb]
+            msims = []
+            for hyp_avg_emb, mref_avg_emb in zip(hyps_avg_emb, mrefs_avg_emb):
+                msim = self._cosine_similarity(np.array([hyp_avg_emb]*len(mref_avg_emb)), np.array(mref_avg_emb))
+                msims.append(msim.tolist())
+            return msims
+        elif method == 'extrema':
+            hyps_ext_emb = []
+            refs_ext_emb = []
+            for hyp, ref in zip(hyps_emb, refs_emb):
+                h_max = np.max(hyp, axis=0)
+                h_min = np.min(hyp, axis=0)
+                h_plus = np.absolute(h_min) <= h_max
+                h = h_max * h_plus + h_min * np.logical_not(h_plus)
+                hyps_ext_emb.append(h)
 
-            # if none of the words in response or ground truth have embeddings, count result as zero
-            if x_count < 1 or y_count < 1:
-                scores.append(0)
-                continue
+                r_max = np.max(ref, axis=0)
+                r_min = np.min(ref, axis=0)
+                r_plus = np.absolute(r_min) <= r_max
+                r = r_max * r_plus + r_min * np.logical_not(r_plus)
+                refs_ext_emb.append(r)
+            sims = self._cosine_similarity(np.array(hyps_ext_emb), np.array(refs_ext_emb))
+            return sims.tolist()
+        elif method == "multi_ref_extrema":
+            hyps_ext_emb = []
+            mrefs_ext_emb = []
+            for hyp, mref in zip(hyps_emb, refs_emb):
+                h_max = np.max(hyp, axis=0)
+                h_min = np.min(hyp, axis=0)
+                h_plus = np.absolute(h_min) <= h_max
+                h = h_max * h_plus + h_min * np.logical_not(h_plus)
+                hyps_ext_emb.append(h)
 
-            o /= float(x_count)
-            scores.append(o)
-
-        return np.asarray(scores)
-
-    def vector_extrema_score(self, refs, hyps):
-        scores = []
-        for i, (ref, hyp) in enumerate(zip(refs, hyps)):
-            X, Y = [], []
-            x_cnt, y_cnt = 0, 0
-            for tok in ref:
-                if tok in self.w2v:
-                    X.append(self.w2v[tok])
-                    x_cnt += 1
-            for tok in hyp:
-                if tok in self.w2v:
-                    Y.append(self.w2v[tok])
-                    y_cnt += 1
-
-            # if none of the words in ground truth have embeddings, skip
-            if x_cnt == 0:
-                continue
-
-            # if none of the words have embeddings in response, count result as zero
-            if y_cnt == 0:
-                scores.append(0)
-                continue
-
-            xmax = np.max(X, 0)  # get positive max
-            xmin = np.min(X, 0)  # get abs of min
-            xtrema = []
-            for i in range(len(xmax)):
-                if np.abs(xmin[i]) > xmax[i]:
-                    xtrema.append(xmin[i])
-                else:
-                    xtrema.append(xmax[i])
-            X = np.array(xtrema)   # get extrema
-
-            ymax = np.max(Y, 0)
-            ymin = np.min(Y, 0)
-            ytrema = []
-            for i in range(len(ymax)):
-                if np.abs(ymin[i]) > ymax[i]:
-                    ytrema.append(ymin[i])
-                else:
-                    ytrema.append(ymax[i])
-            Y = np.array(ytrema)
-
-            o = sklearn.metrics.pairwise.cosine_similarity(Y.reshape(1, -1), X.reshape(1, -1))[0][0]
-
-            scores.append(o)
-
-        scores = np.asarray(scores)
-        return scores
-
-    def embedding_average_score(self, refs, hyps):
-        scores = []
-        for ref, hyp in zip(refs, hyps):
-            X = np.zeros((self.emb_dim,))
-            x_cnt, y_cnt = 0, 0
-            for tok in ref:
-                if tok in self.w2v:
-                    X += self.w2v[tok]
-                    x_cnt += 1
-            Y = np.zeros((self.emb_dim,))
-            for tok in hyp:
-                if tok in self.w2v:
-                    Y += self.w2v[tok]
-                    y_cnt += 1
-
-            # if none of the words in ground truth have embeddings, skip
-            if x_cnt == 0:
-                continue
-
-            # if none of the words have embeddings in response, count result as zero
-            if y_cnt == 0:
-                scores.append(0)
-                continue
-
-            X = np.array(X)/x_cnt
-            Y = np.array(Y)/y_cnt
-            o = sklearn.metrics.pairwise.cosine_similarity(Y.reshape(1, -1), X.reshape(1, -1))[0][0]
-            scores.append(o)
-
-        scores = np.asarray(scores)
-        return scores
+                mref_ext_emb = []
+                for ref in mref:
+                    r_max = np.max(ref, axis=0)
+                    r_min = np.min(ref, axis=0)
+                    r_plus = np.absolute(r_min) <= r_max
+                    r = r_max * r_plus + r_min * np.logical_not(r_plus)
+                    mref_ext_emb.append(r)
+                mrefs_ext_emb.append(mref_ext_emb)
+            msims = []
+            for hyp_ext_emb, mref_ext_emb in zip(hyps_ext_emb, mrefs_ext_emb):
+                msim = self._cosine_similarity(np.array([hyp_ext_emb]*len(mref_ext_emb)), np.array(mref_ext_emb))
+                msims.append(msim.tolist())
+            return msims
+        elif method == 'greedy':
+            sims = []
+            for hyp, ref in zip(hyps_emb, refs_emb):
+                hyp = np.array(hyp)
+                ref = np.array(ref).T
+                sim = (np.matmul(hyp, ref) / (np.sqrt(np.matmul(np.sum(hyp * hyp, axis=1, keepdims=True), np.sum(ref * ref, axis=0, keepdims=True)))+1e-10))
+                sim = np.max(sim, axis=0).mean()
+                sims.append(sim)
+            return sims
+        elif method == "multi_ref_greedy":
+            msims = []
+            for hyp, mref in zip(hyps_emb, refs_emb):
+                hyp = np.array(hyp)
+                msim = []
+                for ref in mref:
+                    ref = np.array(ref).T
+                    sim = (np.matmul(hyp, ref) / (np.sqrt(np.matmul(np.sum(hyp * hyp, axis=1, keepdims=True), np.sum(ref * ref, axis=0, keepdims=True)))+1e-10))
+                    sim = np.max(sim, axis=0).mean()
+                    msim.append(sim)
+                msims.append(msim)
+            return msims
+        else:
+            raise NotImplementedError
 
     def score(self, refs, hyps):
-        greedy_score = self.greedy_matching_score(refs, hyps)
-        extrema_score = self.vector_extrema_score(refs, hyps)
-        average_score = self.embedding_average_score(refs, hyps)
-        return greedy_score, extrema_score, average_score
+        """Calculate Average/Extrema/Greedy embedding similarities in a batch
+
+        Arguments:
+            refs {list of list} -- references, each reference is a list of tokens
+            hyps {list of list} -- hypotheses, each hypothesis is a list of tokens
+
+        Returns:
+            {list of float} Average similarities
+            {list of float} Extrema similarities
+            {list of float} Greedy similarities
+        """
+        assert len(hyps) == len(refs)
+        
+        hyps_emb = [self._tokens2emb(tokens) for tokens in hyps]
+        refs_emb = [self._tokens2emb(tokens) for tokens in refs]
+
+        emb_greedy_scores = self._embedding_metric(hyps_emb, refs_emb, "greedy")
+        emb_ext_scores = self._embedding_metric(hyps_emb, refs_emb, "extrema")
+        emb_avg_scores = self._embedding_metric(hyps_emb, refs_emb, "average")        
+
+        return emb_greedy_scores, emb_ext_scores, emb_avg_scores
+
+    def multi_ref_score(self, mrefs, hyps):
+        """Calculate multi-referenced Average/Extrema/Greedy embedding similarities in a batch
+
+        Arguments:
+            mrefs {list of list of list} -- multi-references, each multi-reference is a list 
+                                            of references, each reference is a list of tokens
+            hyps {list of str} -- hypotheses, each hypothesis is a list of tokens
+
+        Returns:
+            {list of float} Average similarities
+            {list of float} Extrema similarities
+            {list of float} Greedy similarities
+        """
+        assert len(hyps) == len(mrefs)
+
+        hyps_emb = [self._tokens2emb(tokens) for tokens in hyps]
+        mrefs_emb = [[self._tokens2emb(tokens) for tokens in mref_tokens] for mref_tokens in mrefs]
+
+        emb_greedy_scores = self._embedding_metric(hyps_emb, mrefs_emb, "multi_ref_greedy")
+        emb_ext_scores = self._embedding_metric(hyps_emb, mrefs_emb, "multi_ref_extrema")
+        emb_avg_scores = self._embedding_metric(hyps_emb, mrefs_emb, "multi_ref_average")        
+
+        return emb_greedy_scores, emb_ext_scores, emb_avg_scores
