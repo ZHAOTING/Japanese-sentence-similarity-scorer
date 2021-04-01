@@ -88,7 +88,6 @@ class EmbeddingBasedScorer():
         self.w2v = self._get_w2v(embedding_path, vocab)
         self.vocab_size = len(self.w2v)
         self.emb_dim = next(iter(self.w2v.values())).shape[0]
-        print(f"Embedding-based scorer loaded {len(self.w2v)} embeddings from {embedding_path}")
 
     def _get_w2v(self, path, vocab=None):
         fin = io.open(path, 'r', encoding='utf-8', newline='\n', errors='ignore')
@@ -110,12 +109,14 @@ class EmbeddingBasedScorer():
         missing_words = vocab.difference(set(w2v.keys()))
         print(f"Words not found in pretrained embeddings: {list(missing_words)}")
         
+        print(f"Embedding-based scorer loaded {len(w2v)} embeddings. {len(missing_words)} words are not found.")
+        
         return w2v
 
     def _tokens2emb(self, tokens):
         embs = [self.w2v[token] for token in tokens if token in self.w2v]
         if len(embs) == 0:
-            embs = [[0.]*self.emb_mat.shape[1]]
+            embs = [[0.]*self.emb_dim]
         return embs
 
     def _cosine_similarity(self, hyps, refs):
